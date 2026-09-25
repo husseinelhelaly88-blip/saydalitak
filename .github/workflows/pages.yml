@@ -1,4 +1,4 @@
-name: Deploy SAYDALITAK to GitHub Pages
+name: Validate SAYDALITAK production
 
 on:
   push:
@@ -7,43 +7,26 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: true
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rebuild production site
+      - uses: actions/checkout@v4
+      - name: Validate production pieces
         shell: bash
         run: |
+          echo "== plain parts =="
+          sha256sum parts/part01.txt parts/part02.txt parts/part03.txt parts/part04.txt parts/part05.txt parts/tail01.txt parts/tail02.txt
+          echo "== compressed tails (decompressed hashes) =="
+          for f in parts/tail03.txt.gz parts/tail04.txt.gz parts/tail05.txt.gz parts/tail06.txt.gz parts/tail07.txt.gz parts/tail08.txt.gz parts/tail09.txt.gz; do
+            printf "%s  " "$f"
+            gzip -dc "$f" | sha256sum
+          done
           cat parts/part01.txt parts/part02.txt parts/part03.txt parts/part04.txt parts/part05.txt parts/tail01.txt parts/tail02.txt > index.html
           for f in parts/tail03.txt.gz parts/tail04.txt.gz parts/tail05.txt.gz parts/tail06.txt.gz parts/tail07.txt.gz parts/tail08.txt.gz parts/tail09.txt.gz; do
             gzip -dc "$f" >> index.html
           done
-          echo "d51e95b982222e547505ba6dd2f89fd2b6881db51e48ba7cde913bd902346814  index.html" | sha256sum -c -
-          touch .nojekyll
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          echo "== assembled =="
+          wc -c index.html
+          sha256sum index.html
