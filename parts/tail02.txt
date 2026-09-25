@@ -1,0 +1,244 @@
+'انتهت مهلة تحميل النتائج.')); }, timeoutMs);
+    document.head.appendChild(script);
+  });
+}
+
+
+const CATALOG_CACHE_KEY = 'saydalitak_catalog_v63';
+let productCatalog = [];
+let catalogReadyPromise = null;
+let catalogLoadedFromCache = false;
+
+function normalizeSearchText(value){
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/[ًٌٍَُِّْـ]/g, '')
+    .replace(/[^\u0600-\u06FFa-z0-9]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function prepareCatalog(items){
+  return (items || []).map(p => {
+    const item = {...p};
+    item.__name = normalizeSearchText(productDisplayName(item));
+    item.__english = normalizeSearchText(item.englishName || '');
+    item.__category = normalizeSearchText(item.category || '');
+    item.__search = normalizeSearchText([
+      item.arabicName, item.englishName, item.generic,
+      item.strength, item.form, item.category
+    ].filter(Boolean).join(' '));
+    return item;
+  });
+}
+
+function readCatalogCache(){
+  try {
+    const raw = localStorage.getItem(CATALOG_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.products)) return [];
+    return parsed.products;
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeCatalogCache(products){
+  try {
+    localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      products
+    }));
+  } catch (_) {}
+}
+
+async function loadProductCatalog(forceRefresh = false){
+  if (!forceRefresh && productCatalog.length) return productCatalog;
+  if (!forceRefresh && catalogReadyPromise) return catalogReadyPromise;
+
+  if (!productCatalog.length) {
+    const cached = readCatalogCache();
+    if (cached.length) {
+      productCatalog = prepareCatalog(cached);
+      catalogLoadedFromCache = true;
+    }
+  }
+
+  const request = (async () => {
+    try {
+      const result = await jsonpRequest({action:'catalog'}, 12000);
+      if (!result || result.success === false) {
+        throw new Error(result && result.error ? result.error : 'تعذر تحميل قائمة المنتجات.');
+      }
+      const fresh = Array.isArray(result.products) ? result.products : [];
+      if (fresh.length) {
+        productCatalog = prepareCatalog(fresh);
+        writeCatalogCache(fresh);
+        catalogLoadedFromCache = false;
+      }
+      return productCatalog;
+    } catch (error) {
+      if (productCatalog.length) return productCatalog;
+      throw error;
+    }
+  })();
+
+  if (!forceRefresh) catalogReadyPromise = request;
+  try {
+    return await request;
+  } finally {
+    if (!forceRefresh) catalogReadyPromise = null;
+  }
+}
+
+function rankProduct(p, needle){
+  if (p.__name === needle || p.__english === needle) return 0;
+  if (p.__name.startsWith(needle) || p.__english.startsWith(needle)) return 1;
+  const words = p.__search.split(' ');
+  if (words.some(w => w.startsWith(needle))) return 2;
+  if (p.__search.includes(needle)) return 3;
+  return 99;
+}
+
+async function searchProducts(query, limit = 10){
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  await loadProductCatalog(false);
+  const needle = normalizeSearchText(q);
+  const safeLimit = Math.min(40, Math.max(1, Number(limit || 10)));
+
+  return productCatalog
+    .filter(p => p.__search.includes(needle))
+    .map(p => ({p, score: rankProduct(p, needle)}))
+    .sort((a,b) => a.score - b.score || a.p.__name.localeCompare(b.p.__name, 'ar'))
+    .slice(0, safeLimit)
+    .map(x => x.p);
+}
+
+const CATEGORY_ALIASES = {
+  'مسكنات': ['مسكنات','خافض حرارة','آلام','المفاصل','العضلات'],
+  'أدوية البرد': ['البرد','الإنفلونزا','الحساسية','الأنف','الحلق'],
+  'العناية الشخصية': ['العناية الشخصية','الفم','الشعر','أمومة'],
+  'العناية بالبشرة': ['العناية بالبشرة','مطهرات'],
+  'فيتامينات': ['فيتامينات','مكملات'],
+  'مستلزمات طبية': ['مستلزمات طبية','أجهزة','إسعافات']
+};
+
+async function getCategoryProducts(categoryLabel, limit = 80){
+  await loadProductCatalog(false);
+  const label = String(categoryLabel || '').trim();
+  const terms = (CATEGORY_ALIASES[label] || [label]).map(normalizeSearchText).filter(Boolean);
+  if (!terms.length) return [];
+  return productCatalog
+    .filter(p => terms.some(t => p.__category.includes(t) || p.__search.includes(t)))
+    .slice(0, Math.max(1, Number(limit || 80)));
+}
+
+function escapeHtml(value){
+  return String(value == null ? '' : value)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+
+function productDisplayName(p){
+  return (p.arabicName || p.englishName || p.generic || '').trim();
+}
+
+async function waitForOrderConfirmation(customerRef){
+  let lastResult = null;
+
+  for (let attempt = 0; attempt < 6; attempt++) {
+    if (attempt > 0) {
+      await new Promise(resolve => setTimeout(resolve, 900));
+    }
+
+    try {
+      lastResult = await checkOrderStatus(customerRef);
+
+      if (lastResult && lastResult.found) {
+        return lastResult;
+      }
+
+      if (lastResult && lastResult.success === false && lastResult.error) {
+        throw new Error(lastResult.error);
+      }
+    } catch (error) {
+      if (attempt === 5) throw error;
+    }
+  }
+
+  throw new Error('X�لطلب لم يغهر في قاعدة البيانات.');
+}
+
+async function sendOrder(payload, submitButton){
+  const customerRef = makeCustomerRef();
+  const originalText = submitButton.textContent;
+  submitButton.disabled = true;
+  submitButton.textContent = 'جاري الارسال...';
+
+  payload.notes = [payload.notes || '', `Customer Ref: ${customerRef}`]
+    .filter(Boolean)
+    .join(' | ');
+
+  try {
+    await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+
+    submitButton.textContent = 'جاري التأكد...';
+    const confirmation = await waitForOrderConfirmation(customerRef);
+
+    return {
+      customerRef,
+      orderId: confirmation.orderId || '',
+      status: confirmation.status || 'New'
+    };
+  } catch (error) {
+    console.error('SAYDALITAK order error:', error);
+    throw error;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = originalText;
+  }
+}
+
+async function preparePrescriptionImage(file){
+  if (!file) throw new Error('Y�م يتم اختيار صاصر.');
+  if (!file.type.startsWith('image/')) throw new Error('من فضلك اختر صورة للروشتة.');
+  if (file.size > 15 * 1024 * 1024) throw new Error('X�جم الصورة كبير جدا. اختر صاصر أقل من 15 MB.');
+
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const img = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+
+  const maxSide = 1600;
+  let width = img.naturalWidth || img.width;
+  let height = img.naturalHeight || img.height;
+  const scale = Math.min(1, maxSide / Math.max(width, height));
+  width = Math.max(1, Math.round(width * scale));
+  height = Math.max(1, Math.round(height * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const compressed = canvas.toDataURL
