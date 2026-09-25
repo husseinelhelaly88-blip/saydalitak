@@ -30,15 +30,19 @@ jobs:
           python - <<'PY'
           import base64, gzip, hashlib, pathlib
           root = pathlib.Path(".")
-          b64 = b"".join((root/"fix"/f"full_prod_{i}.b64").read_bytes().strip() for i in range(1,5))
-          compressed = base64.b64decode(b64, validate=True)
-          html = gzip.decompress(compressed)
+          compressed = bytearray()
+          for i in range(1,5):
+              part = (root/"fix"/f"full_prod_{i}.b64").read_bytes().strip()
+              compressed += base64.b64decode(part, validate=True)
+
+          html = gzip.decompress(bytes(compressed))
           digest = hashlib.sha256(html).hexdigest()
           expected = "d51e95b982222e547505ba6dd2f89fd2b6881db51e48ba7cde913bd902346814"
           print("bytes:", len(html))
           print("sha256:", digest)
           if digest != expected:
               raise SystemExit(f"Checksum mismatch: {digest}")
+
           (root/"index.html").write_bytes(html)
           (root/".nojekyll").touch()
           PY
