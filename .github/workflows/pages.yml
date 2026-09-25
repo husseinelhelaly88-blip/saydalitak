@@ -27,15 +27,38 @@ jobs:
       - name: Rebuild exact production site
         shell: bash
         run: |
-          cat parts/part01.txt parts/part02.txt > index.html
-          cat fix/part03_1.b64 fix/part03_2.b64 fix/part03_3.b64 fix/part03_4.b64 | base64 -d | gzip -dc >> index.html
-          cat parts/part04.txt parts/part05.txt parts/tail01.txt >> index.html
-          base64 -d fix/tail02.b64 | gzip -dc >> index.html
-          for f in parts/tail03.txt.gz parts/tail04.txt.gz parts/tail05.txt.gz parts/tail06.txt.gz parts/tail07.txt.gz parts/tail08.txt.gz parts/tail09.txt.gz; do
-            gzip -dc "$f" >> index.html
-          done
-          echo "d51e95b982222e547505ba6dd2f89fd2b6881db51e48ba7cde913bd902346814  index.html" | sha256sum -c -
-          touch .nojekyll
+          python - <<'PY'
+          import base64, gzip, hashlib, pathlib
+
+          root = pathlib.Path(".")
+          out = bytearray()
+
+          for name in ["part01.txt","part02.txt"]:
+              out += (root/"parts"/name).read_bytes()
+
+          b64 = b"".join((root/"fix"/name).read_bytes().strip()
+                         for name in ["part03_1.b64","part03_2.b64","part03_3.b64","part03_4.b64"])
+          out += gzip.decompress(base64.b64decode(b64, validate=True))
+
+          for name in ["part04.txt","part05.txt","tail01.txt"]:
+              out += (root/"parts"/name).read_bytes()
+
+          tail02 = base64.b64decode((root/"fix"/"tail02.b64").read_bytes().strip(), validate=True)
+          out += gzip.decompress(tail02)
+
+          for name in ["tail03.txt.gz","tail04.txt.gz","tail05.txt.gz","tail06.txt.gz","tail07.txt.gz","tail08.txt.gz","tail09.txt.gz"]:
+              out += gzip.decompress((root/"parts"/name).read_bytes())
+
+          digest = hashlib.sha256(out).hexdigest()
+          expected = "d51e95b982222e547505ba6dd2f89fd2b6881db51e48ba7cde913bd902346814"
+          print("assembled bytes:", len(out))
+          print("sha256:", digest)
+          if digest != expected:
+              raise SystemExit(f"Checksum mismatch: {digest}")
+
+          (root/"index.html").write_bytes(out)
+          (root/".nojekyll").touch()
+          PY
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
