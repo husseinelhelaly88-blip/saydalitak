@@ -31,9 +31,13 @@ jobs:
           import base64, gzip, hashlib, pathlib
           root = pathlib.Path(".")
           compressed = bytearray()
-          for i in range(1,5):
-              part = (root/"fix"/f"full_prod_{i}.b64").read_bytes().strip()
-              compressed += base64.b64decode(part, validate=True)
+
+          compressed += base64.b64decode((root/"fix"/"gzchunk1.b64").read_bytes().strip(), validate=True)
+
+          for n in (2,3,4):
+              a = (root/"fix"/f"gzchunk{n}a.txt").read_bytes().strip()
+              b = (root/"fix"/f"gzchunk{n}b.txt").read_bytes().strip()
+              compressed += base64.b64decode(a + b, validate=True)
 
           html = gzip.decompress(bytes(compressed))
           digest = hashlib.sha256(html).hexdigest()
