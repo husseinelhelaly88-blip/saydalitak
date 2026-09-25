@@ -1,0 +1,123 @@
+n-card]').forEach(card => {
+    card.classList.toggle('saved', Boolean(loc));
+    const title = card.querySelector('[data-form-location-title]');
+    const sub = card.querySelector('[data-form-location-sub]');
+    const btn = card.querySelector('[data-inline-location]');
+    if (title) title.textContent = loc ? 'تم تحديد موقعك ✓' : 'أضف موقعك على الخريطة';
+    if (sub) sub.textContent = loc ? 'سيتم إرفاق رابط الموقع تلقائيًا مع الطلب.' : 'يساعدنا في الوصول إليك بشكل أدق وأسرع.';
+    if (btn) btn.textContent = loc ? 'تغيير' : 'تحديد';
+  });
+}
+
+function locationModal(){
+  const loc = getSavedLocation();
+  openModal('حدد موقعك', `
+    <div class="location-permission">
+      <div class="pin-big">📍</div>
+      <h3>${loc ? 'موقعك محفوظ' : 'شارك موقعك الحالي'}</h3>
+      <p>${loc ? 'يمكنك تغيير الموقع في أي وقت، وسيتم استخدام الموقع الأحدث في طلبات التوصيل.' : 'سنطلب إذن الموقع من المتصفح مرة واحدة، ثم نرفق رابط Google Maps تلقائيًا مع طلبات التوصيل.'}</p>
+      ${loc ? `<span class="location-link-preview">${escapeHtml(loc.url)}</span>` : ''}
+      <div class="privacy-note">نستخدم الموقع لتسهيل تنفيذ وتوصيل طلبك فقط. ويمكنك مسحه من الموقع في أي وقت.</div>
+      <div class="location-actions">
+        <button type="button" class="primary-btn" id="useCurrentLocationBtn">${loc ? '📍 تحديث موقعي' : '📍 استخدم موقعي الحالي'}</button>
+        ${loc ? '<button type="button" class="secondary-btn" id="clearLocationBtn">مسح الموقع المحفوظ</button>' : ''}
+      </div>
+      <div id="locationModalMsg" style="margin-top:12px;font-size:12px;color:#6c7c91"></div>
+    </div>`);
+
+  const useBtn = document.getElementById('useCurrentLocationBtn');
+  const msg = document.getElementById('locationModalMsg');
+  useBtn.addEventListener('click', async () => {
+    const old = useBtn.textContent;
+    useBtn.disabled = true;
+    useBtn.textContent = 'جاري تحديد الموقع...';
+    if (msg) msg.textContent = '';
+    try {
+      const saved = await requestCurrentLocation();
+      if (msg) msg.innerHTML = `✅ تم تحديد الموقع بنجاح. <a href="${saved.url}" target="_blank" rel="noopener">فتح على الخريطة</a>`;
+      useBtn.textContent = 'تم الحفظ ✓';
+      setTimeout(() => locationModal(), 650);
+    } catch (err) {
+      if (msg) msg.textContent = err.message || 'تعذر تحديد الموقع.';
+      useBtn.disabled = false;
+      useBtn.textContent = old;
+    }
+  });
+
+  const clearBtn = document.getElementById('clearLocationBtn');
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    clearSavedLocation();
+    locationModal();
+  });
+}
+
+function getDeliveryLocationPayload(form){
+  const addressInput = form.querySelector('[name="address"]');
+  const address = addressInput ? addressInput.value.trim() : '';
+  const loc = getSavedLocation();
+  if (!address && !loc) {
+    alert('من فضلك حدد موقعك أو اكتب تفاصيل العنوان قبل إرسال الطلب.');
+    if (addressInput) addressInput.focus();
+    return null;
+  }
+  return { address, locationUrl: loc ? loc.url : '' };
+}
+
+function checkOrderStatus(customerRef, timeoutMs = 7000){
+  return new Promise((resolve, reject) => {
+    const callbackName = '__saydalitak_cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    const script = document.createElement('script');
+    let finished = false;
+
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+
+    window[callbackName] = data => {
+      cleanup();
+      resolve(data || {});
+    };
+
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('تعذر التأكد من وصول الطلب.'));
+    };
+
+    script.src = SCRIPT_URL
+      + '?action=status'
+      + '&ref=' + encodeURIComponent(customerRef)
+      + '&callback=' + encodeURIComponent(callbackName)
+      + '&_=' + Date.now();
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('انتهت مهلة التأكد من وصول الطلب.'));
+    }, timeoutMs);
+
+    document.head.appendChild(script);
+  });
+}
+
+
+function jsonpRequest(params, timeoutMs = 6500){
+  return new Promise((resolve, reject) => {
+    const callbackName = '__saydalitak_jsonp_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    const script = document.createElement('script');
+    let finished = false;
+    let timer;
+    const cleanup = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      try { delete window[callbackName]; } catch (_) { window[callbackName] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+    window[callbackName] = data => { cleanup(); resolve(data || {}); };
+    script.onerror = () => { cleanup(); reject(new Error('تعذر تحميل النتائج.')); };
+    const qs = new URLSearchParams({...params, callback: callbackName, _: Date.now()});
+    script.src = SCRIPT_URL + '?' + qs.toString();
+    timer = setTimeout(() => { cleanup(); reject(new Error(
